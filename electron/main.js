@@ -156,8 +156,7 @@ async function createWindow() {
   if (isDev) {
     await mainWindow.loadURL(DEV_URL)
   } else {
-    await mainWindow.loadFile(path.join(__dirname, 'dist', 'index.html'))
-    mainWindow.webContents.openDevTools()
+    await mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
   }
   //teste
   mainWindow.webContents.openDevTools({ mode: 'detach' })
