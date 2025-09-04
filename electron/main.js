@@ -158,14 +158,6 @@ async function createWindow() {
   } else {
     await mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
   }
-  //teste
-  mainWindow.webContents.openDevTools({ mode: 'detach' })
-  mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {
-    console.log('did-fail-load', code, desc, url)
-  })
-  mainWindow.webContents.on('render-process-gone', (_e, details) => {
-    console.log('render-process-gone', details)
-  })
 
   startPolling()
 }
