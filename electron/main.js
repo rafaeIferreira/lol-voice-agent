@@ -17,6 +17,40 @@ const __dirname = path.dirname(__filename)
 let fallbackMatchId = null
 let lastGameEndAt = 0
 const GAME_END_GRACE_MS = 15000
+const httpsKeepAlive = new https.Agent({ keepAlive: true })
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
+
+async function wakeBackend(base) {
+  // tenta acordar o Render (free tier “dorme”)
+  try {
+    await axios.get(base + '/health', { timeout: 8000, httpsAgent: httpsKeepAlive })
+  } catch {}
+}
+
+async function postJoinWithRetry(base, body) {
+  const maxAttempts = 3
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const res = await axios.post(base + '/join', body, {
+        timeout: 20000,              // ↑ 20s
+        httpsAgent: httpsKeepAlive,
+      })
+      return res.data
+    } catch (e) {
+      const status = e?.response?.status
+      const retriable =
+        e.code === 'ECONNABORTED' || e.code === 'ETIMEDOUT' ||
+        !status || [429, 500, 502, 503, 504].includes(status)
+
+      if (attempt < maxAttempts && retriable) {
+        await sleep(1000 * attempt * attempt) // backoff 1s, 4s
+        continue
+      }
+      throw e
+    }
+  }
+}
 
 function normalizeId(p) {
   if (!p) return ''
@@ -140,9 +174,9 @@ async function createWindow() {
     height: 740,
     minWidth: 900,
     minHeight: 600,
-    frame: false,                    // <— sem bordas
-    autoHideMenuBar: true,           // <— esconde menu (Windows/Linux)
-    titleBarStyle: 'hidden',         // <— macOS
+    frame: false,                    
+    autoHideMenuBar: true,           
+    titleBarStyle: 'hidden',         
     backgroundColor: '#0b0b0b',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -222,26 +256,24 @@ ipcMain.handle('voice:get-identity', async () => {
 
 ipcMain.handle('voice:join', async (_evt, payload) => {
   const identity = getIdentity()
-  const backend =
-    payload.backendUrl ||
-    'https://lol-voice.onrender.com'
-
-
+  const backend = payload.backendUrl || 'https://lol-voice.onrender.com'
 
   if (!payload?.roomName) {
     const msg = 'Sem sala disponível (parece que você não está em partida).'
     dialog.showErrorBox('Join bloqueado', msg)
     throw new Error(msg)
   }
-  console.log(">>> VOICE:JOIN chamando backend:", backend)
-  try {
-    const res = await axios.post(backend + '/join', {
-      room: payload.roomName,
-      identity,
-      name: payload.identityName || identity
-    }, { timeout: 5000 })
 
-    return res.data
+  const body = {
+    room: payload.roomName,
+    identity,
+    name: payload.identityName || identity
+  }
+
+  try {
+    await wakeBackend(backend)                    // “acorda” o Render
+    const data = await postJoinWithRetry(backend, body)  // tenta com retry
+    return data
   } catch (e) {
     dialog.showErrorBox('Join error', String(e?.response?.data?.error || e.message || e))
     throw e
