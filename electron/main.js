@@ -14,7 +14,8 @@ import { fileURLToPath } from 'url'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
-let fallbackMatchId = null
+let fallbackMatchId = getCurrentMatchId()
+
 let lastGameEndAt = 0
 const GAME_END_GRACE_MS = 15000
 const httpsKeepAlive = new https.Agent({ keepAlive: true })
@@ -52,6 +53,28 @@ async function postJoinWithRetry(base, body) {
   }
 }
 
+function getStore() {
+  try { return JSON.parse(fs.readFileSync(storePath, 'utf-8')) } catch { return {} }
+}
+function setStore(next) {
+  fs.writeFileSync(storePath, JSON.stringify(next, null, 2))
+}
+function getCurrentMatchId() {
+  const st = getStore()
+  return st.currentMatchId || null
+}
+function setCurrentMatchId(id) {
+  const st = getStore()
+  st.currentMatchId = id
+  setStore(st)
+}
+function clearCurrentMatchId() {
+  const st = getStore()
+  delete st.currentMatchId
+  setStore(st)
+}
+
+
 function normalizeId(p) {
   if (!p) return ''
   // prioriza riotId; senão monta gameName#tag; senão summonerName
@@ -74,15 +97,15 @@ function handleEvents(events) {
   for (const ev of events.Events) {
     if (ev.EventName === 'GameStart') {
       if (!fallbackMatchId) {
-        fallbackMatchId = 'local-' + Date.now()
+        fallbackMatchId = getCurrentMatchId() || ('local-' + Date.now())
+        setCurrentMatchId(fallbackMatchId)
         lastGameEndAt = 0
-        console.log('Novo fallbackMatchId:', fallbackMatchId)
+        console.log('Novo fallbackMatchId (persistido):', fallbackMatchId)
       }
     }
     if (ev.EventName === 'GameEnd') {
       lastGameEndAt = Date.now()
       console.log('GameEnd recebido, inicia período de graça…')
-      // NÃO zere o fallbackMatchId aqui. Espere o grace no polling.
     }
   }
 }
@@ -138,11 +161,26 @@ async function getLiveClientData() {
   }
 }
 
+function rosterSignature(players, team) {
+  return (players || [])
+    .filter(p => p.team === team)
+    .map(p => (p.riotId || p.summonerName || '').toLowerCase())
+    .sort()
+    .join('|')
+}
+
+function stableMatchKey(gameId, players, team) {
+  if (gameId) return String(gameId)
+  const sig = rosterSignature(players, team) || 'unknown'
+  return 'sig-' + crypto.createHash('sha1').update(sig).digest('hex').slice(0,12)
+}
+
 
 
 function computeRoomFromTeam(data) {
   const team = data.team
-  let matchId = data.gameId ?? fallbackMatchId
+  let matchId = stableMatchKey(data.gameId, data.players, data.team) ?? fallbackMatchId
+
   if (!team || !matchId) return null
 
   const roomName = `lolvoice-${matchId}-${team}`
@@ -228,13 +266,13 @@ function startPolling() {
       const events = await axios.get(base + "/eventdata", { httpsAgent: agent })
       handleEvents(events.data)
 
-      // Se recebemos GameEnd, respeite o grace antes de “apagar” tudo
       if (lastGameEndAt && Date.now() - lastGameEndAt > GAME_END_GRACE_MS) {
         fallbackMatchId = null
+        clearCurrentMatchId()
         lastGameEndAt = 0
-        // Força pro “fora de partida”
         mainWindow.webContents.send("presence:update", { inGame: false, ready: false })
       }
+
 
     } catch (e) {
       // Não há mais API (cliente fechou a partida): fora de jogo
