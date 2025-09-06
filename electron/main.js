@@ -1,4 +1,4 @@
-
+// electron/main.js
 import { app, BrowserWindow, ipcMain, dialog, Menu } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -9,13 +9,11 @@ import axios from 'axios'
 import https from 'https'
 import { fileURLToPath } from 'url'
 
-
 // Corrige __filename e __dirname no ESM
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 let fallbackMatchId = getCurrentMatchId()
-
 let lastGameEndAt = 0
 const GAME_END_GRACE_MS = 15000
 const httpsKeepAlive = new https.Agent({ keepAlive: true })
@@ -26,7 +24,7 @@ async function wakeBackend(base) {
   // tenta acordar o Render (free tier “dorme”)
   try {
     await axios.get(base + '/health', { timeout: 8000, httpsAgent: httpsKeepAlive })
-  } catch {}
+  } catch { }
 }
 
 async function postJoinWithRetry(base, body) {
@@ -74,7 +72,6 @@ function clearCurrentMatchId() {
   setStore(st)
 }
 
-
 function normalizeId(p) {
   if (!p) return ''
   // prioriza riotId; senão monta gameName#tag; senão summonerName
@@ -89,7 +86,7 @@ const isDev = !!DEV_URL
 let mainWindow
 let pollTimer = null
 
-// Simple storage in userData
+// Simple storage em userData
 const storePath = path.join(app.getPath('userData'), 'lolvoice-store.json')
 
 function handleEvents(events) {
@@ -109,7 +106,6 @@ function handleEvents(events) {
     }
   }
 }
-
 
 function loadStore() {
   try {
@@ -138,10 +134,7 @@ async function getLiveClientData() {
     const url = 'https://127.0.0.1:2999/liveclientdata/allgamedata'
     const agent = new https.Agent({ rejectUnauthorized: false })
 
-    console.log('Requesting:', url)
     const res = await axios.get(url, { timeout: 5000, httpsAgent: agent })
-    console.log('Response OK')
-
     const { activePlayer, allPlayers, gameData } = res.data || {}
 
     const me = allPlayers?.find(p =>
@@ -151,12 +144,8 @@ async function getLiveClientData() {
     const team = me?.team || activePlayer?.team || null
     const gameId = gameData?.gameId ?? null
 
-    console.log("ALLGAMEDATA", JSON.stringify(res.data, null, 2))
-    console.log("ME", me, "TEAM", team, "GAMEID", gameId)
-
     return { ok: true, team, gameId, gameData, activePlayer, players: allPlayers || [] }
   } catch (e) {
-    console.error("Erro no getLiveClientData:", e.code, e.message)
     return { ok: false, error: String(e?.message || e) }
   }
 }
@@ -172,10 +161,8 @@ function rosterSignature(players, team) {
 function stableMatchKey(gameId, players, team) {
   if (gameId) return String(gameId)
   const sig = rosterSignature(players, team) || 'unknown'
-  return 'sig-' + crypto.createHash('sha1').update(sig).digest('hex').slice(0,12)
+  return 'sig-' + crypto.createHash('sha1').update(sig).digest('hex').slice(0, 12)
 }
-
-
 
 function computeRoomFromTeam(data) {
   const team = data.team
@@ -202,19 +189,15 @@ function computeRoomFromTeam(data) {
   return { roomName, names: roster.map(r => r.name), identityName, team, roster }
 }
 
-
-
-
-
 async function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1120,
     height: 740,
     minWidth: 900,
     minHeight: 600,
-    frame: false,                    
-    autoHideMenuBar: true,           
-    titleBarStyle: 'hidden',         
+    frame: false,
+    autoHideMenuBar: true,
+    titleBarStyle: 'hidden',
     backgroundColor: '#0b0b0b',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -239,7 +222,7 @@ ipcMain.handle('window:close', () => mainWindow?.close())
 
 function startPolling() {
   if (pollTimer) clearInterval(pollTimer)
-  pollTimer = setInterval(async () => {
+  pollTimer = safeInterval(async () => {
     try {
       const base = "https://127.0.0.1:2999/liveclientdata"
       const agent = new https.Agent({ rejectUnauthorized: false })
@@ -251,15 +234,31 @@ function startPolling() {
       const team = me?.team || activePlayer?.team || null
       const gameId = gameData?.gameId ?? null
 
-      // Deriva a sala
+      // Deriva a sala e infos básicas da partida
       const derived = computeRoomFromTeam({ team, gameId, activePlayer, players: allPlayers })
+      const matchTimeSec = Math.floor(Number(gameData?.gameTime || 0))
+      const mode = gameData?.gameMode || ''
+      const map = gameData?.mapName || ''
+
       if (derived) {
-        mainWindow.webContents.send("presence:update", {
-          inGame: true, team: derived.team, ready: true,
-          roomName: derived.roomName, identityName: derived.identityName, names: derived.names
+        // envia somente para a janela principal
+        mainWindow?.webContents?.send("presence:update", {
+          inGame: true,
+          team: derived.team,
+          ready: true,
+          roomName: derived.roomName,
+          identityName: derived.identityName,
+          names: derived.names,
+          teamRoster: derived.roster,
+          matchTimeSec, mode, map
         })
       } else {
-        mainWindow.webContents.send("presence:update", { inGame: true, team, ready: false })
+        mainWindow?.webContents?.send("presence:update", {
+          inGame: true,
+          team,
+          ready: false,
+          matchTimeSec, mode, map
+        })
       }
 
       // Eventos (para GameStart/GameEnd)
@@ -270,13 +269,14 @@ function startPolling() {
         fallbackMatchId = null
         clearCurrentMatchId()
         lastGameEndAt = 0
-        mainWindow.webContents.send("presence:update", { inGame: false, ready: false })
+        mainWindow?.webContents?.send("presence:update", { inGame: false, ready: false })
       }
-
 
     } catch (e) {
       // Não há mais API (cliente fechou a partida): fora de jogo
-      mainWindow.webContents.send("presence:update", { inGame: false, ready: false, error: String(e.message || e) })
+      mainWindow?.webContents?.send("presence:update", {
+        inGame: false, ready: false, error: String(e.message || e)
+      })
       // Se já passou o grace, limpe fallback
       if (lastGameEndAt && Date.now() - lastGameEndAt > GAME_END_GRACE_MS) {
         fallbackMatchId = null
@@ -285,8 +285,6 @@ function startPolling() {
     }
   }, 2000)
 }
-
-
 
 ipcMain.handle('voice:get-identity', async () => {
   return { identity: getIdentity() }

@@ -1,0 +1,137 @@
+<!doctype html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <title>Overlay - Speakers</title>
+  <style>
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      background: transparent;
+      user-select: none;
+    }
+
+    #wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 12px;
+      filter: drop-shadow(0 6px 18px rgba(0, 0, 0, .55));
+    }
+
+    .bubble {
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 2px solid rgba(255, 255, 255, 0.12);
+      overflow: hidden;
+      position: relative;
+      opacity: 0;
+      transform: scale(.85);
+      transition: opacity .18s ease, transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+      width: 58px;
+      height: 58px;
+      /* será atualizado por config */
+    }
+
+    .bubble.visible {
+      opacity: 1;
+      transform: scale(1);
+      border-color: #22c55e;
+      box-shadow: 0 0 0 2px #22c55e55, inset 0 0 22px #22c55e33;
+    }
+
+    .img {
+      position: absolute;
+      inset: 0;
+      background-size: cover;
+      background-position: center;
+    }
+
+    .fallback {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      color: #e5e7eb;
+      font-weight: 800;
+      font-size: 18px;
+      background: linear-gradient(180deg, rgba(10, 10, 10, .6), rgba(10, 10, 10, .25));
+    }
+  </style>
+</head>
+
+<body>
+  <div id="wrap"></div>
+  <script>
+    const wrap = document.getElementById('wrap');
+    const bubbles = new Map(); // key: nameLower -> {el, lastSeenAt}
+    let HOLD_MS = 700;
+    let BUBBLE_SIZE = 58;
+
+    function setBubbleSize(el) {
+      el.style.width = BUBBLE_SIZE + 'px';
+      el.style.height = BUBBLE_SIZE + 'px';
+    }
+
+    function ensureBubble(item) {
+      const key = (item.name || '').toLowerCase();
+      let entry = bubbles.get(key);
+      if (!entry) {
+        const el = document.createElement('div');
+        el.className = 'bubble';
+        setBubbleSize(el);
+        const img = document.createElement('div');
+        img.className = 'img';
+        if (item.iconUrl) img.style.backgroundImage = `url("${item.iconUrl}")`;
+        el.appendChild(img);
+        if (!item.iconUrl) {
+          const fb = document.createElement('div');
+          fb.className = 'fallback';
+          fb.textContent = (item.name || '•').slice(0, 1).toUpperCase();
+          el.appendChild(fb);
+        }
+        wrap.appendChild(el);
+        entry = { el, lastSeenAt: 0 };
+        bubbles.set(key, entry);
+        requestAnimationFrame(() => el.classList.add('visible'));
+      } else {
+        const img = entry.el.querySelector('.img');
+        if (img && item.iconUrl) img.style.backgroundImage = `url("${item.iconUrl}")`;
+        setBubbleSize(entry.el);
+        entry.el.classList.add('visible');
+      }
+      entry.lastSeenAt = Date.now();
+    }
+
+    function sweep() {
+      const now = Date.now();
+      for (const [key, entry] of bubbles) {
+        if (now - entry.lastSeenAt > HOLD_MS) {
+          entry.el.classList.remove('visible');
+          setTimeout(() => {
+            if (entry.el.parentNode) entry.el.parentNode.removeChild(entry.el);
+            bubbles.delete(key);
+          }, 220);
+        }
+      }
+    }
+
+    function onUpdate(payload) {
+      if (payload?.__config) {
+        const { bubbleSize, holdMs } = payload.__config
+        if (typeof bubbleSize === 'number') BUBBLE_SIZE = bubbleSize
+        if (typeof holdMs === 'number') HOLD_MS = holdMs
+        return
+      }
+      const list = payload?.list || [];
+      for (const it of list) ensureBubble(it);
+      sweep();
+    }
+
+    window.overlayAPI?.onUpdate?.(onUpdate);
+  </script>
+</body>
+
+</html>

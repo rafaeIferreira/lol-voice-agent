@@ -9,7 +9,19 @@ contextBridge.exposeInMainWorld('voiceAPI', {
   getIdentity: () => ipcRenderer.invoke('voice:get-identity'),
   join: (payload) => ipcRenderer.invoke('voice:join', payload)
 })
+
 contextBridge.exposeInMainWorld('windowAPI', {
   minimize: () => ipcRenderer.invoke('window:minimize'),
   close: () => ipcRenderer.invoke('window:close'),
+})
+
+// [overlay] nova API
+contextBridge.exposeInMainWorld('overlayAPI', {
+  sendState: (state) => ipcRenderer.send('overlay:update', state),
+  onOverlayState: (cb) => {
+    const handler = (_e, s) => cb(s)
+    ipcRenderer.on('overlay:state', handler)
+    return () => ipcRenderer.removeListener('overlay:state', handler)
+  },
+  toggleClickThrough: (enabled) => ipcRenderer.invoke('overlay:toggle-clickthrough', enabled),
 })
